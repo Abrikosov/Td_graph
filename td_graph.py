@@ -17,6 +17,8 @@ DDL_TABLES_PATH = "DDL/Tables"
 DDL_VIEWS_PATH = "DDL/Views"
 DDL_PROCEDURES_PATH = "DDL/Procedures"
 
+OBJECT_TYPE_ID_DICT = {"T": 1, "V": 2, "P": 3, "NA": 4}
+
 class Td_Graph(object):
 
     def __init__(self):
@@ -53,8 +55,8 @@ class Td_Graph(object):
         self.re_sql_call_compile = re.compile(r"\bCALL\s+(\S+)\b", re.IGNORECASE)
 
         # Граф объектов БД будем представлять в виде двух списков: списка вершин и списка связей.
-        # nodes = {"table1": {"id":1}, "view1": {"id":2}, "table2": {"id":3}}
-        # edges = [(1,2), (3,2), ]
+        # nodes = {"table1": {"id":1, "type": "T"}, "view1": {"id":2, "type": "V"}, "table2": {"id":3, "type": "T"}}
+        # edges = [("table1", "view1"), ("table2", "view1"), ]
         # num_nodes = 3
         # В нашем случае граф - ориентированный
 
@@ -66,11 +68,11 @@ class Td_Graph(object):
     def __get_node_id(self):
 
         self.num_nodes += 1
-        return self.num_nodes
+        return self.num_nodes-1
 
-    def __add_nodes(self, object_name):
+    def __add_nodes(self, object_name, obj_type="NA"):
 
-        self.nodes[object_name] = {"id": self.__get_node_id()}
+        self.nodes[object_name] = {"id": self.__get_node_id(), "type": obj_type}
 
     def __add_edge(self, source_object, target_object):
 
@@ -80,7 +82,7 @@ class Td_Graph(object):
         if target_object not in self.nodes:
             self.__add_nodes(target_object)
 
-        self.edges.append((self.nodes[source_object]["id"], self.nodes[target_object]["id"]))
+        self.edges.append((source_object, target_object))
 
 
     def get_tables(self):
@@ -90,7 +92,7 @@ class Td_Graph(object):
         for ddl_file_name in filter(lambda x: x.endswith('.sql'), os.listdir(path=DDL_TABLES_PATH)):
             server_name, schema_name, object_name = self.re_file_name_compile.search(ddl_file_name).groups()
             target_object = server_name + "__" + schema_name + "__" + object_name
-            self.__add_nodes(target_object)
+            self.__add_nodes(target_object, obj_type="T")
 
     def get_views(self):
 
@@ -103,7 +105,7 @@ class Td_Graph(object):
             # Определяем наименование сервера, далее мы его будет прибавлять к названиям найденных смежных объектов.
             server_name, schema_name, object_name = self.re_file_name_compile.search(ddl_file_name).groups()
             target_object = server_name + "__" + schema_name + "__" + object_name
-            self.__add_nodes(target_object)
+            self.__add_nodes(target_object, obj_type="V")
 
             with open(DDL_VIEWS_PATH + "/" + ddl_file_name, "r") as ddl_file:
                 # Считываем код из файла и удаляем комментарии (заменяем на один пробел)
@@ -125,7 +127,7 @@ class Td_Graph(object):
             # Определяем наименование сервера, далее мы его будет прибавлять к названиям найденных смежных объектов.
             server_name, schema_name, object_name = self.re_file_name_compile.search(ddl_file_name).groups()
             procedure_name = server_name + "__" + schema_name + "__" + object_name
-            self.__add_nodes(procedure_name)
+            self.__add_nodes(procedure_name, obj_type="P")
 
             with open(DDL_PROCEDURES_PATH + "/" + ddl_file_name, "r") as ddl_file:
                 # Считываем код из файла и удаляем комментарии (заменяем на один пробел)
@@ -150,14 +152,29 @@ class Td_Graph(object):
                     self.__add_edge(procedure_name, target_object)
 
     def export_to_gml(self, file_name):
-
+        # Экспорт данных в формате Graph Modeling Language (GML)
         with open(file_name, "w") as gml_file:
-            gml_file.write("graph\n[\n")
-            for key, value in self.nodes.items():
-                gml_file.write("""\tnode\n\t[\n\t\tid {0}\n\t\tlabel "{1}"\n\t]\n""".format(value["id"], key))
-            for source_object_id, target_object_id in self.edges:
-                gml_file.write("""\tedge\n\t[\n\t\tsource {0}\n\t\ttarget {1}\n\t]\n""".format(source_object_id, target_object_id))
-            gml_file.write("]")
+            gml_file.write("graph\n[\n\t")
+            gml_file.write("\n\t".join(["""node\n\t[\n\t\tid {0}\n\t\tlabel "{1}"\n\t]""".
+                                         format(value["id"], key) for (key, value) in self.nodes.items()]))
+            gml_file.write("\n\t")
+            gml_file.write("\n\t".join(["""edge\n\t[\n\t\tsource {0}\n\t\ttarget {1}\n\t]""".
+                                       format(self.nodes[source_object]["id"], self.nodes[target_object]["id"])
+                                        for (source_object, target_object) in self.edges]))
+            gml_file.write("\n]")
+
+    def export_to_json(self, file_name):
+        # Экспорт данных в формате JSON (D3.js)
+        with open(file_name, "w") as json_file:
+            json_file.write("""{\n"nodes":[\n\t""")
+            json_file.write(",\n\t".join(["""{{"name": "{0}", "group": {1}}}""".
+                                         format(key, OBJECT_TYPE_ID_DICT[value["type"]])
+                                          for (key, value) in sorted(self.nodes.items(), key=lambda x: x[1]['id'])]))
+            json_file.write("""\n\t],\n"links":[\n\t""")
+            json_file.write(",\n\t".join(["""{{"source":{0},"target":{1},"value":1}}""".
+                                         format(self.nodes[source_object]["id"], self.nodes[target_object]["id"])
+                                          for (source_object, target_object) in self.edges]))
+            json_file.write("\n\t]\n}")
 
 if __name__ == "__main__":
 
@@ -165,4 +182,4 @@ if __name__ == "__main__":
     td_graph.get_tables()
     td_graph.get_views()
     td_graph.get_procedures()
-    td_graph.export_to_gml("td_graph.gml")
+    td_graph.export_to_json("td_graph.json")
