@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+
+<!-- CSS стили для узлов, ребер и меток -->
+<style>
+	.link {
+		fill: none;
+		stroke: #666;
+		stroke-width: 1.5px;
+	}
+	.node circle {
+		stroke: #fff;
+		stroke-width: 1.5px;
+	}
+	.node text {
+		pointer-events: none;
+		font: 10px sans-serif;
+	}
+</style>
+
+<body>
+	<div class="ui-widget">
+		<input id="search">
+    <button type="button" onclick="searchNode()">Search</button>
+	</div>
+	<!-- Библиотека должна находится в том же каталоге, что и данный файл -->
+	<script src="d3/d3.v3.min.js"></script>
+	<script src="jquery/jquery-2.1.0.js"></script>
+	<script src="jquery/jquery-ui.min.js"></script>
+	<link rel="stylesheet" type="text/css" href="jquery/jquery-ui.css">
+	<script>
+		//Задаем ширину и высоту контейнера svg.
+		var width = window.innerWidth, height = window.innerHeight;
+		var svg = d3.select("body").append("svg")
+				.attr("width", width)
+				.attr("height", height);
+
+		// Добавляем стрелки
+		svg.append("defs").selectAll("marker")
+				.data(['end'])
+				.enter().append("marker")
+				.attr("id", String)
+				.attr("viewBox", "0 -5 10 10")
+				.attr("refX", 16)
+				.attr("refY", 0)
+				.attr("markerWidth", 6)
+				.attr("markerHeight", 6)
+				.attr("orient", "auto")
+				.append("svg:path")
+				.attr("d", 'M0, -5L10,0L0,5');
+
+		//Функция соотвествия группа - цвет
+		var color = d3.scale.category10();
+
+		//Задаем свойства force layout: gravity, distance, size.
+		var force = d3.layout.force()
+					.charge(-1000)
+					.linkDistance(30)
+					.size([width, height]);
+
+		// Используемые глобальные переменные
+		var graph;			// граф
+		var optArray = [];	// список для автодополнения при поиске
+		var depDict = {};	// соотвесствие имени объекта и связанных с ним объектов
+		var link;			// связи
+		
+		//Получаем данные в формате JSON, содержащие информацию о графе.
+		d3.json("td_graph.json", function(error, data) {
+			if (error) return console.warn(error);
+
+			graph = data;
+
+			// Функция обновления графа
+			force.on("tick", function () {
+				link.attr("x1", function (d) { return d.source.x; })
+						.attr("y1", function (d) { return d.source.y; })
+						.attr("x2", function (d) { return d.target.x; })
+						.attr("y2", function (d) { return d.target.y; });
+				d3.selectAll("circle")
+						.attr("cx", function (d) { return d.x; })
+						.attr("cy", function (d) { return d.y; });
+				d3.selectAll("text")
+						.attr("x", function (d) { return d.x; })
+						.attr("y", function (d) { return d.y; });
+				d3.selectAll("rect")
+						.attr("x", function (d) { return d.x; })
+						.attr("y", function (d) { return d.y; });
+			});
+
+			// Формируем список для автодополнения при поиске
+			for (var i = 0; i <= graph.nodes.length - 1; i++) {
+				optArray.push(graph.nodes[i].name);
+			}
+
+			optArray = optArray.sort();
+			$(function () {
+				$("#search").autocomplete({
+					source: optArray
+				});
+			})
+
+			// Формируем словарь со списком зависимостей для каждого объекта
+			// Сам объект также включаем в этот список
+			for (var i = 0; i <= graph.nodes.length - 1; i++) {
+				depDict[graph.nodes[i].name] = graph.nodes[i].dependency
+																						.concat(graph.nodes[i].name);
+			}
+
+		});
+
+		// Функция отрисовки подграфа. Вх. параметр - массив узлов подлежащих отрисовки
+		function drawGraph(selected_obj) {
+
+				// Отфильтровываем узлы 
+				var selected_nodes = graph.nodes.filter(function(d) {
+					return selected_obj.indexOf(d.name) !== -1;
+				});
+				
+				// Исходные данные links содержат id элементов. Их нужно будет перекодировать
+				var indexArray = [];
+				for (var i = 0; i <= selected_nodes.length - 1; i++) {
+					indexArray.push(selected_nodes[i].name);
+				}; 
+				
+				// Получаем новый массив со связями
+				var selected_links = [];
+				for (var i = 0; i <= graph.links.length - 1; i++) {
+					var source_index = indexArray.indexOf(graph.nodes[graph.links[i].source].name);
+					var target_index = indexArray.indexOf(graph.nodes[graph.links[i].target].name);
+					if ((source_index !== -1) && (target_index !== -1))	{
+						selected_links.push({"source": source_index, "target": target_index, "value": graph.links[i].value});
+					};		
+				};
+				
+				// Запускаем симуляцию
+				force.nodes(selected_nodes)
+					.links(selected_links)
+					.start();
+
+				//Отрисовываем ребра (предварительно очистив) 
+				svg.selectAll(".link").remove();
+				link = svg.selectAll(".link").data(selected_links);
+				link.enter()
+					.append("line")
+					.attr("class", "link")
+					.style("marker-end",  "url(#end)");
+
+				//Отрисовывем узлы (предварительно очистив)
+				svg.selectAll(".node").remove();
+				var node = svg.selectAll(".node")
+							.data(selected_nodes);
+				node.enter()
+					.append("g")
+					.attr("class", "node")
+					.call(force.drag);
+				
+				node.append("circle")
+						.attr("r", 6)
+						.style("fill", function(d) { return color(d.group); });
+
+				// Добавляем названия объектов
+				node.append("text")
+						.attr("dx", 12)
+						.attr("dy", ".35em")
+						.text(function(d) { return d.name });
+
+		}
+
+		// Поиск объектов 
+		function searchNode() {
+			var selectedVal = document.getElementById('search').value;
+			if (selectedVal !== "none" && optArray.indexOf(selectedVal) !== -1) {
+				drawGraph(depDict[selectedVal]);
+			}
+		}
+
+	</script>
